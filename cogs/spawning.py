@@ -1,19 +1,102 @@
-from urllib.parse import urljoin
 import asyncio
 import io
 import random
 import time
 from collections import defaultdict
+from datetime import datetime
+from urllib.parse import urljoin
 
 import aiohttp
 import discord
-from data import models
 from discord.ext import commands, tasks
-
 from helpers import checks
+
+from data import models
+
 from . import mongo
 
 MIN_SPAWN_THRESHOLD = 20
+
+AFD_START_DT = datetime(2021, 3, 31, 12, 0)
+AFD_END_DT = datetime(2021, 4, 2, 12, 0)
+
+AFD_HINTS = [
+    "Frankly, my dear, I don't give a damn",
+    "Toto, I've got a feeling we're not getting hints anymore",
+    "What we've got here is a failure to communicate",
+    "I am not throwing away my shot!",
+    "What's your damage, Trainer?",
+    "Oliver, we have a problem.",
+    "I am P2",
+    "Pokétwo, assemble!",
+    "Spawn ga shienda!",
+    "I still believe in P2",
+    "I can do this all day",
+    "May the Pokétwo be with you",
+    "You've got a Pokémon in me",
+    "Just keep catching",
+    "Any place or thing in the universe can be up to 104% perfect. That’s how you got Pokémon.",
+    "MAYBE TRY SUNFLORA",
+    "I ask of you, are you my trainer",
+    "How do you expect me to know -_-",
+    "Use google!",
+    "Try #whos-that-pokémon ",
+    "No.",
+    "Bot. Pokétwo bot.",
+    """I don't know who you are
+I don't know what you want
+but if you autocatch, 
+I will find you and I will suspend you""",
+    "Hasta la vista, Pokétwo!",
+    "You can't catch a Pokémon you just met!",
+    "The names two, Pokétwo",
+    "o.o",
+    "¯\_(ツ)_/¯",
+    "Supercalifragilisticpokétwolidocious!",
+    "Pokétwo, for lack of a better word, is good.",
+    "Keep your friends close, but your pokémon closer",
+    "Im Zubatman",
+    "A pokemon, this is",
+    "To catch or not to catch, that is the question",
+    "This pokemon begins with 'Google it!!!!'",
+    "It's not Mario!",
+    "p!hint: NO",
+    "Poisson d'avril",
+    "It's alive! It's alive!",
+    "Just keep guessing",
+    "Ketchum. Ash Ketchum.",
+    "Elementary, my dear Trainer.",
+    "May the Sunflora be with you.",
+    "I think this is a Pokémon",
+    "How would I know?",
+    "I'm not sure...",
+    "Huh? Never seen that before",
+    "Dude, where's my pokemon?",
+    "Show me the Pokécoin!",
+    "Poketwo-chan waaaa, kyoumo kawaii!",
+    "You shall not catch",
+    "To Pokétwo and beyond!",
+    "Happiness is where Pokétwo is",
+    "If you're nothing without the hint, maybe you shouldn't have it.",
+    "Hints? Where we're going, we don't need hints.",
+    "Its a bird... Its a plane... Its ___!",
+    "You talkin' to me?",
+    """We shall catch on the beaches, we shall catch on the landing grounds, we shall catch in the fields and in the streets, we shall catch in the hills; we shall never surrender.
+
+anyways what was this thing's name?""",
+    "Hakuna ratata.",
+    """Who's that pokemon?
+
+its ???????? !""",
+    "May the hints ever be in your favor.",
+    "With great hints comes great responsibility.",
+    "In the end, cowards are those who follow the hints.",
+    "Do or do not. There is no hint.",
+    "Difficult to see. Always in motion is the Pokémon.",
+    "If hint you count on, disappointed your hopes will be.",
+    "Hint matters not. Look at me. Judge me by my hint, do you?",
+    "We all know you can't take a hint",
+]
 
 
 def write_fp(data):
@@ -308,6 +391,9 @@ class Spawning(commands.Cog):
         if not await self.bot.redis.hexists("wild", ctx.channel.id):
             return
 
+        if AFD_END_DT > datetime.utcnow() > AFD_START_DT:
+            return await ctx.send(random.choice(AFD_HINTS))
+
         species_id = await self.bot.redis.hget("wild", ctx.channel.id)
         species = self.bot.data.species_by_number(int(species_id))
 
@@ -434,6 +520,10 @@ class Spawning(commands.Cog):
 
         if shiny:
             message += "\n\nThese colors seem unusual... ✨"
+
+        if AFD_END_DT > datetime.utcnow() > AFD_START_DT:
+            if not shiny and random.random() < 0.01:
+                message += "\n\nThese colors don't seem unusual... <a:sparkles:825926707864141867>"
 
         await self.bot.redis.delete(f"redeem:{ctx.channel.id}")
 
