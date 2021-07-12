@@ -36,7 +36,7 @@ if __name__ == "__main__":
     config = Config(
         DATABASE_URI=uri,
         DATABASE_NAME=os.environ["DATABASE_NAME"],
-        BOT_TOKEN=os.environ["ODU5Njc0NTI4OTQ1NTM3MDY3.YNwISw.VNOIhss-oT_NKWwlylDZZR--HhM"],
+        BOT_TOKEN=os.environ["BOT_TOKEN"],
         REDIS_CONF={
             "address": os.environ["REDIS_URI"],
             "password": os.getenv("REDIS_PASSWORD"),
