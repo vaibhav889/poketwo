@@ -1,14 +1,15 @@
-from aioredis_lock import RedisLock
 import asyncio
 from importlib import reload
+import aiohttp
 
 import discord
 import uvloop
+from aioredis_lock import RedisLock
 from discord.ext import commands
+from expiringdict import ExpiringDict
 
 import cogs
 import helpers
-
 
 uvloop.install()
 
@@ -43,7 +44,7 @@ class ClusterBot(commands.AutoShardedBot):
             self.config = __import__("config")
 
         self.ready = False
-        self.menus = {}
+        self.menus = ExpiringDict(max_len=300, max_age_seconds=300)
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -68,11 +69,10 @@ class ClusterBot(commands.AutoShardedBot):
         )
         self.add_check(is_enabled)
 
-        # Run bot
+        self.activity = discord.Game("p!help • poketwo.net")
+        self.http_session = aiohttp.ClientSession()
 
-        self.log.info(
-            f'[Cluster#{self.cluster_name}] {kwargs["shard_ids"]}, {kwargs["shard_count"]}'
-        )
+        # Run bot
 
         self.loop.create_task(self.do_startup_tasks())
         self.run(kwargs["token"])
@@ -111,16 +111,34 @@ class ClusterBot(commands.AutoShardedBot):
 
     # Other stuff
 
+    async def send_dm(self, user, *args, **kwargs):
+        # This code can wait until Messageable + Object comes out.
+        # user_data = await self.mongo.fetch_member_info(discord.Object(uid))
+        # if (priv := user_data.private_message_id) is None:
+        #     priv = await self.http.start_private_message(uid)
+        #     priv = int(priv["id"])
+        #     self.loop.create_task(
+        #         self.mongo.update_member(uid, {"$set": {"private_message_id": priv}})
+        #     )
+
+        if not isinstance(user, discord.abc.Snowflake):
+            user = discord.Object(user)
+
+        dm = await self.create_dm(user)
+        return await dm.send(*args, **kwargs)
+
     async def do_startup_tasks(self):
+        self.log.info(f"Starting with shards {self.shard_ids} and total {self.shard_count}")
+
         await self.wait_until_ready()
         self.ready = True
         self.log.info(f"Logged in as {self.user}")
 
     async def on_ready(self):
-        self.log.info(f"[Cluster#{self.cluster_name}] Ready called.")
+        self.log.info(f"Ready called.")
 
     async def on_shard_ready(self, shard_id):
-        self.log.info(f"[Cluster#{self.cluster_name}] Shard {shard_id} ready")
+        self.log.info(f"Shard {shard_id} ready")
 
     async def on_message(self, message: discord.Message):
         message.content = (
@@ -130,8 +148,8 @@ class ClusterBot(commands.AutoShardedBot):
         await self.process_commands(message)
 
     async def before_identify_hook(self, shard_id, *, initial=False):
-        async with RedisLock(self.redis, f"identify:{shard_id % 8}", 10, None):
-            await asyncio.sleep(10)
+        async with RedisLock(self.redis, f"identify:{shard_id % 16}", 5, None):
+            await asyncio.sleep(5)
 
     async def close(self):
         self.log.info("shutting down")

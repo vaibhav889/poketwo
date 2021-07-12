@@ -27,11 +27,14 @@ class Shop(commands.Cog):
 
     @tasks.loop(minutes=5)
     async def check_weekend(self):
-        async with aiohttp.ClientSession() as session:
-            async with session.get("https://discordbots.org/api/weekend") as r:
-                if r.status == 200:
-                    js = await r.json()
-                    self.weekend = js["is_weekend"]
+        async with self.bot.http_session.get("https://discordbots.org/api/weekend") as r:
+            if r.status == 200:
+                js = await r.json()
+                self.weekend = js["is_weekend"]
+
+    @check_weekend.before_loop
+    async def before_check_weekend(self):
+        await self.bot.wait_until_ready()
 
     @property
     def month_number(self):
@@ -724,6 +727,7 @@ class Shop(commands.Cog):
             await self.bot.mongo.update_channel(
                 ctx.channel,
                 {
+                    "$set": {"guild_id": ctx.guild.id},
                     "$inc": {"spawns_remaining": 180},
                 },
             )

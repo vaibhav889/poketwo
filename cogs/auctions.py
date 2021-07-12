@@ -14,13 +14,6 @@ from discord.ext import commands, flags, tasks
 from helpers import checks, converters, pagination
 
 
-async def query_member(guild, id):
-    r = await guild.query_members(user_ids=(id,))
-    if len(r) == 0:
-        return None
-    return r[0]
-
-
 class AuctionConverter(commands.Converter):
     async def convert(self, ctx, arg):
         try:
@@ -46,7 +39,6 @@ class Auctions(commands.Cog):
 
     @tasks.loop(minutes=1)
     async def check_auctions(self):
-        await self.bot.wait_until_ready()
         auctions = self.bot.mongo.Auction.find({"ends": {"$lt": datetime.utcnow()}})
         async for auction in auctions:
             try:
@@ -54,6 +46,10 @@ class Auctions(commands.Cog):
             except Exception as e:
                 print(e)
                 continue
+
+    @check_auctions.before_loop
+    async def before_check_auctions(self):
+        await self.bot.wait_until_ready()
 
     async def end_auction(self, auction):
         if (auction_guild := self.bot.get_guild(auction.guild_id)) is None:
@@ -67,12 +63,12 @@ class Auctions(commands.Cog):
 
         host = (
             self.bot.get_user(auction.user_id)
-            or await query_member(auction_guild, auction.user_id)
+            or await auction_guild.fetch_member(auction.user_id)
             or FakeUser(auction.user_id)
         )
         bidder = (
             self.bot.get_user(auction.bidder_id)
-            or await query_member(auction_guild, auction.bidder_id)
+            or await auction_guild.fetch_member(auction.bidder_id)
             or FakeUser(auction.bidder_id)
         )
 
@@ -409,7 +405,7 @@ class Auctions(commands.Cog):
 
             host = (
                 self.bot.get_user(auction.user_id)
-                or await query_member(ctx.guild, auction.user_id)
+                or await ctx.guild.fetch_member(auction.user_id)
                 or FakeUser(auction.user_id)
             )
 
@@ -456,17 +452,14 @@ class Auctions(commands.Cog):
                 await self.bot.mongo.update_member(
                     auction.bidder_id, {"$inc": {"balance": auction.current_bid}}
                 )
-                priv = await self.bot.http.start_private_message(auction.bidder_id)
                 self.bot.loop.create_task(
-                    self.bot.http.send_message(
-                        priv["id"],
+                    self.bot.send_dm(
+                        auction.bidder_id,
                         f"You have been outbid on the **{auction.pokemon.iv_percentage:.2%} {auction.pokemon.species}** (Auction #{auction.id}).",
                     )
                 )
-            self.bot.loop.create_task(
-                ctx.send(
-                    f"You bid **{bid:,} Pokécoins** on the **{auction.pokemon.iv_percentage:.2%} {auction.pokemon.species}** (Auction #{auction.id})."
-                )
+            await ctx.send(
+                f"You bid **{bid:,} Pokécoins** on the **{auction.pokemon.iv_percentage:.2%} {auction.pokemon.species}** (Auction #{auction.id})."
             )
 
     # TODO put all these flags into a single decorator
@@ -585,7 +578,7 @@ class Auctions(commands.Cog):
 
         host = (
             self.bot.get_user(auction.user_id)
-            or await query_member(ctx.guild, auction.user_id)
+            or await ctx.guild.fetch_member(auction.user_id)
             or FakeUser(auction.user_id)
         )
 
@@ -599,7 +592,7 @@ class Auctions(commands.Cog):
         else:
             bidder = (
                 self.bot.get_user(auction.bidder_id)
-                or await query_member(ctx.guild, auction.bidder_id)
+                or await ctx.guild.fetch_member(auction.bidder_id)
                 or FakeUser(auction.bidder_id)
             )
 

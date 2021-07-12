@@ -1,3 +1,4 @@
+import asyncio
 import pickle
 import random
 import sys
@@ -23,19 +24,20 @@ class Bot(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
+        headers = {"Authorization": self.bot.config.DBL_TOKEN}
+        self.dbl_session = aiohttp.ClientSession(headers=headers)
 
         if not hasattr(self.bot, "prefixes"):
             self.bot.prefixes = {}
 
         self.post_count.start()
-        self.update_status.start()
-        self.process_dms.start()
 
         if self.bot.cluster_idx == 0 and self.bot.config.DBL_TOKEN is not None:
             self.post_dbl.start()
             self.remind_votes.start()
 
         self.cd = commands.CooldownMapping.from_cooldown(5, 3, commands.BucketType.user)
+        self.bot.loop.create_task(self.process_dms())
 
     async def bot_check(self, ctx):
         if ctx.invoked_with.lower() == "help":
@@ -47,20 +49,13 @@ class Bot(commands.Cog):
 
         return True
 
-    async def send_dm(self, uid, content):
-        priv = await self.bot.http.start_private_message(uid)
-        await self.bot.http.send_message(priv["id"], content)
-
-    @tasks.loop(seconds=0.5)
     async def process_dms(self):
-        with await self.bot.redis as r:
-            req = await r.blpop("send_dm")
-            uid, content = pickle.loads(req[1])
-            self.bot.loop.create_task(self.send_dm(uid, content))
-
-    @process_dms.before_loop
-    async def before_process_dms(self):
         await self.bot.wait_until_ready()
+        with await self.bot.redis as r:
+            while True:
+                req = await r.blpop("send_dm")
+                uid, content = pickle.loads(req[1])
+                self.bot.loop.create_task(self.bot.send_dm(uid, content))
 
     @commands.Cog.listener()
     async def on_message_edit(self, before, after):
@@ -69,17 +64,22 @@ class Bot(commands.Cog):
     @commands.Cog.listener()
     async def on_command(self, ctx):
         self.bot.log.info(
-            f'COMMAND {ctx.author.id} {ctx.command.qualified_name}: {ctx.author} "{ctx.message.content}"'
+            "Command run",
+            extra={
+                "userid": ctx.author.id,
+                "user": str(ctx.author),
+                "command": ctx.command.qualified_name,
+                "content": ctx.message.content,
+            },
         )
 
     @commands.Cog.listener()
     async def on_command_error(self, ctx, error):
 
-        if isinstance(error, Blacklisted):
-            self.bot.log.info(f"{ctx.author.id} is blacklisted")
-            return
-        elif isinstance(error, commands.CommandOnCooldown):
-            self.bot.log.info(f"{ctx.author.id} hit cooldown")
+        if isinstance(error, commands.CommandOnCooldown):
+            self.bot.log.info(
+                "Command cooldown hit", extra={"userid": ctx.author.id, "user": str(ctx.author)}
+            )
             await ctx.message.add_reaction("\N{HOURGLASS}")
         elif isinstance(error, commands.MaxConcurrencyReached):
             name = error.per.name
@@ -94,7 +94,7 @@ class Bot(commands.Cog):
         elif isinstance(error, commands.BotMissingPermissions):
             missing = [
                 "`" + perm.replace("_", " ").replace("guild", "server").title() + "`"
-                for perm in error.missing_perms
+                for perm in error.missing_permissions
             ]
             fmt = "\n".join(missing)
             message = f"💥 Err, I need the following permissions to run this command:\n{fmt}\nPlease fix this and try again."
@@ -248,29 +248,18 @@ class Bot(commands.Cog):
 
         return result
 
-    @tasks.loop(minutes=1)
-    async def update_status(self):
-        await self.bot.wait_until_ready()
-        result = await self.get_stats()
-        await self.bot.change_presence(
-            activity=discord.Activity(
-                type=discord.ActivityType.watching,
-                name=f"{result['servers']:,} servers",
-            )
-        )
-
     @tasks.loop(minutes=5)
     async def post_dbl(self):
-        await self.bot.wait_until_ready()
         result = await self.get_stats()
-        headers = {"Authorization": self.bot.config.DBL_TOKEN}
         data = {"server_count": result["servers"], "shard_count": result["shards"]}
-        async with aiohttp.ClientSession(headers=headers) as sess:
-            await sess.post(f"https://top.gg/api/bots/{self.bot.user.id}/stats", data=data)
+        await self.dbl_session.post(f"https://top.gg/api/bots/{self.bot.user.id}/stats", data=data)
+
+    @post_dbl.before_loop
+    async def before_post_dbl(self):
+        await self.bot.wait_until_ready()
 
     @tasks.loop(seconds=15)
     async def remind_votes(self):
-        await self.bot.wait_until_ready()
         query = {
             "need_vote_reminder": True,
             "last_voted": {"$lt": datetime.utcnow() - timedelta(hours=12)},
@@ -281,10 +270,11 @@ class Bot(commands.Cog):
         async for x in self.bot.mongo.db.member.find(query, {"_id": 1}, no_cursor_timeout=True):
             try:
                 ids.add(x["_id"])
-                priv = await self.bot.http.start_private_message(x["_id"])
-                await self.bot.http.send_message(
-                    priv["id"],
-                    "Your vote timer has refreshed. You can now vote again! https://top.gg/bot/716390085896962058/vote",
+                self.bot.loop.create_task(
+                    self.bot.send_dm(
+                        x["_id"],
+                        "Your vote timer has refreshed. You can now vote again! https://top.gg/bot/716390085896962058/vote",
+                    )
                 )
             except:
                 pass
@@ -293,20 +283,27 @@ class Bot(commands.Cog):
         if len(ids) > 0:
             await self.bot.redis.hdel("db:member", *[int(x) for x in ids])
 
+    @remind_votes.before_loop
+    async def before_remind_votes(self):
+        await self.bot.wait_until_ready()
+
     @tasks.loop(minutes=1)
     async def post_count(self):
-        await self.bot.wait_until_ready()
         await self.bot.mongo.db.stats.update_one(
             {"_id": self.bot.cluster_name},
             {
+                "$max": {"servers": len(self.bot.guilds)},
                 "$set": {
-                    "servers": len(self.bot.guilds),
                     "shards": len(self.bot.shards),
                     "latency": min(sum(x[1] for x in self.bot.latencies), 1),
-                }
+                },
             },
             upsert=True,
         )
+
+    @post_count.before_loop
+    async def before_post_count(self):
+        await self.bot.wait_until_ready()
 
     @commands.command(aliases=("botinfo",))
     async def stats(self, ctx):
@@ -449,7 +446,6 @@ class Bot(commands.Cog):
 
     def cog_unload(self):
         self.post_count.cancel()
-        self.update_status.cancel()
 
         if self.bot.cluster_idx == 0 and self.bot.config.DBL_TOKEN is not None:
             self.post_dbl.cancel()
